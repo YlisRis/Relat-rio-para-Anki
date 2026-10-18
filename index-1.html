@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Relatório → Anki</title>
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/sql.js@1.8.0/dist/sql-asm.js"></script>
+<style>
+:root{--bg:#fff0f8;--bg2:#f1e8ff;--card:#fff;--ink:#4a1d4f;--muted:#8b5e8f;--pink:#e0398a;--soft:#ffd1e6;--line:#f3b9d8;--ok:#0b8f76;--err:#d6205a;
+ box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1d1026;--bg2:#27153a;--card:#2b1a36;--ink:#fbe8f5;--muted:#c9a5d6;--pink:#ff6fb0;--soft:#4a2347;--line:#6b3a66;--ok:#4fe0bf;--err:#ff7a9c}}
+:root[data-theme="dark"]{--bg:#1d1026;--bg2:#27153a;--card:#2b1a36;--ink:#fbe8f5;--muted:#c9a5d6;--pink:#ff6fb0;--soft:#4a2347;--line:#6b3a66;--ok:#4fe0bf;--err:#ff7a9c}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--ink);background:linear-gradient(160deg,var(--bg),var(--bg2));min-height:100vh;background-attachment:fixed}
+main{max-width:720px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:26px;margin:6px 0 2px;color:var(--pink)}p.sub{margin:0 0 18px;color:var(--muted);font-size:14px}
+.box{background:var(--card);border:2.5px solid var(--pink);border-radius:20px;box-shadow:5px 5px 0 var(--soft);padding:16px;margin-bottom:16px}
+label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px;color:var(--pink)}
+input[type=text],textarea{width:100%;font:inherit;color:var(--ink);background:transparent;border:1.5px solid var(--line);border-radius:12px;padding:10px 12px}
+textarea{resize:vertical;min-height:64px}
+button,.btn{font:inherit;font-weight:700;border:0;border-radius:999px;padding:12px 20px;background:var(--pink);color:#fff;cursor:pointer;display:inline-block}
+button.ghost{background:var(--soft);color:var(--ink)}button:disabled{opacity:.5}
+.pick{display:block;text-align:center;border:2.5px dashed var(--pink);border-radius:16px;padding:22px 12px;cursor:pointer;color:var(--pink);font-weight:700}
+.pick{position:relative;overflow:hidden}.pick input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;font-size:0}
+.msg{margin:10px 0 0;font-size:14px}.ok{color:var(--ok)}.err{color:var(--err)}
+.row{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+.c{border:1.5px solid var(--line);border-radius:14px;padding:10px;margin-bottom:10px}
+.c .h{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--muted);margin-bottom:4px}
+.c .h button{padding:4px 12px;font-size:12px;background:transparent;color:var(--err);border:1.5px solid var(--err)}
+.hide{display:none}
+</style></head>
+<body><main>
+<h1>✦ Relatório → Anki</h1>
+<p class="sub">Escolha o relatório (PDF, CSV/TSV ou texto) e baixe o baralho .apkg para importar no Anki. Tudo roda no seu aparelho; nada é enviado a servidores.</p>
+
+<div class="box">
+  <label class="pick"><input id="file" type="file" accept=".pdf,.csv,.tsv,.txt,.md,application/pdf">📄 Toque para escolher o relatório</label>
+  <div class="msg" id="status"></div>
+  <label for="paste">Ou cole aqui o texto (linhas “P:” e “R:”, ou colunas separadas por TAB/;)</label>
+  <textarea id="paste" placeholder="P: Pergunta...&#10;R: Resposta..."></textarea>
+  <div class="row"><button id="usepaste" class="ghost">Usar texto colado</button></div>
+</div>
+
+<div class="box hide" id="cfg">
+  <label for="deck">Baralho (use :: para subbaralhos)</label>
+  <input id="deck" type="text" value="Estudos::Relatórios">
+  <label for="tags">Tags (separadas por espaço)</label>
+  <input id="tags" type="text" placeholder="nefro glomerulopatias">
+</div>
+
+<div class="box hide" id="list">
+  <b id="count"></b>
+  <div id="cards" style="margin-top:10px"></div>
+  <div class="row"><button id="gen">Gerar baralho</button></div>
+  <div class="msg" id="gstatus"></div>
+  <div class="row hide" id="dl">
+    <button id="dl-zip">⬇ Baixar .apkg</button>
+    <button id="dl-txt" class="ghost">⬇ Alternativa .txt</button>
+  </div>
+  <p class="sub hide" id="hint" style="margin-top:12px"></p>
+</div>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+let cards=[], built=null;
+
+/* ---------- Leitura ---------- */
+const GR={alpha:"α",beta:"β",gamma:"γ",delta:"δ",epsilon:"ε",varepsilon:"ε",zeta:"ζ",eta:"η",theta:"θ",iota:"ι",kappa:"κ",lambda:"λ",mu:"μ",nu:"ν",xi:"ξ",pi:"π",rho:"ρ",sigma:"σ",tau:"τ",upsilon:"υ",phi:"φ",varphi:"φ",chi:"χ",psi:"ψ",omega:"ω",Gamma:"Γ",Delta:"Δ",Theta:"Θ",Lambda:"Λ",Xi:"Ξ",Pi:"Π",Sigma:"Σ",Phi:"Φ",Psi:"Ψ",Omega:"Ω",rightarrow:"→",to:"→",leftarrow:"←",leftrightarrow:"↔",Rightarrow:"⇒",uparrow:"↑",downarrow:"↓",geq:"≥",ge:"≥",leq:"≤",le:"≤",neq:"≠",approx:"≈",pm:"±",times:"×",cdot:"·",sim:"~",infty:"∞",circ:"°",degree:"°",bullet:"•",ldots:"…"};
+const SUB={"0":"₀","1":"₁","2":"₂","3":"₃","4":"₄","5":"₅","6":"₆","7":"₇","8":"₈","9":"₉","+":"₊","-":"₋","=":"₌","(":"₍",")":"₎",a:"ₐ",e:"ₑ",h:"ₕ",i:"ᵢ",j:"ⱼ",k:"ₖ",l:"ₗ",m:"ₘ",n:"ₙ",o:"ₒ",p:"ₚ",r:"ᵣ",s:"ₛ",t:"ₜ",u:"ᵤ",v:"ᵥ",x:"ₓ"};
+const SUP={"0":"⁰","1":"¹","2":"²","3":"³","4":"⁴","5":"⁵","6":"⁶","7":"⁷","8":"⁸","9":"⁹","+":"⁺","-":"⁻","=":"⁼","(":"⁽",")":"⁾",i:"ⁱ",n:"ⁿ"};
+const conv=(s,m)=>{let o="";for(const c of s){if(!(c in m))return null;o+=m[c]}return o};
+function limpar(t){
+  t=t||"";
+  t=t.replace(/\$+|\\\(|\\\)|\\\[|\\\]/g,"");
+  for(let i=0;i<4;i++)t=t.replace(/\\(?:text|textbf|textit|mathrm|mathbf|mathit|operatorname|mbox)\s*\{([^{}]*)\}/g,"$1");
+  t=t.replace(/\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g,"$1/$2");
+  t=t.replace(/\\([A-Za-z]+)/g,(m,k)=>k in GR?GR[k]:k);
+  t=t.replace(/\\([%_&#{}])/g,"$1").replace(/\\[,;: !]/g," ");
+  t=t.replace(/_\{([^{}]*)\}|_([0-9+\-])/g,(m,a,b)=>{const s=a!==undefined?a:b;const r=conv(s,SUB);return r!==null?r:"_"+s});
+  t=t.replace(/\^\{([^{}]*)\}|\^([0-9+\-])/g,(m,a,b)=>{const s=a!==undefined?a:b;const r=conv(s,SUP);return r!==null?r:"^"+s});
+  t=t.replace(/\^°/g,"°").replace(/[{}]/g,"");
+  return t.replace(/\s+/g," ").trim();
+}
+const fimOk=s=>/[?.!:]$/.test(s.trim());
+function juntar(p){const out=[];for(let i=0;i<p.length;i++){let [f,v]=p[i];while(!fimOk(f)&&i+1<p.length){i++;f+=" "+p[i][0];v+=" "+p[i][1]}out.push([limpar(f),limpar(v)])}return out}
+
+async function lerPDF(buf){
+  pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
+  const pdf=await pdfjsLib.getDocument({data:buf}).promise, pares=[];
+  for(let n=1;n<=pdf.numPages;n++){
+    const pg=await pdf.getPage(n), W=pg.getViewport({scale:1}).width, tc=await pg.getTextContent();
+    const its=tc.items.filter(i=>i.str.trim()).map(i=>({s:i.str,x:i.transform[4],y:i.transform[5],w:i.width}));
+    its.sort((a,b)=>b.y-a.y||a.x-b.x);
+    const lines=[];for(const it of its){const L=lines[lines.length-1];if(L&&Math.abs(L.y-it.y)<=2.5)L.it.push(it);else lines.push({y:it.y,it:[it]})}
+    lines.forEach(L=>L.it.sort((a,b)=>a.x-b.x));
+    const hi=lines.findIndex(L=>L.it.some(i=>i.s.trim()==="Frente")&&L.it.some(i=>i.s.trim()==="Verso"));
+    if(hi<0)continue;
+    const xv=lines[hi].it.find(i=>i.s.trim()==="Verso").x, split=Math.min(xv-6,W/2);
+    const txt=arr=>{let s="",e=null;for(const i of arr){if(e!==null&&i.x-e>1.2)s+=" ";s+=i.s;e=i.x+i.w}return s.trim()};
+    const rows=[],backs=[];
+    let prevQ=true;
+    for(const L of lines.slice(hi+1)){
+      const f=txt(L.it.filter(i=>i.x<split)), b=txt(L.it.filter(i=>i.x>=split));
+      if(f){if(prevQ)rows.push({y:L.y,f:"",b:""});rows[rows.length-1].f+=" "+f;prevQ=f.endsWith("?")}
+      if(b)backs.push({y:L.y,b});
+    }
+    for(const k of backs){let r=null;for(const row of rows)if(row.y+3>=k.y)r=row;if(r)r.b+=" "+k.b}
+    rows.forEach(r=>pares.push([r.f,r.b]));
+  }
+  return juntar(pares);
+}
+function lerTexto(nome,t){
+  if(/\.(csv|tsv)$/i.test(nome)||/\t/.test(t)){
+    const d=/\.tsv$/i.test(nome)||/\t/.test(t)?"\t":((t.match(/;/g)||[]).length>(t.match(/,/g)||[]).length?";":",");
+    return t.split(/\r?\n/).map(l=>l.split(d)).filter(r=>r.length>=2&&!/^frente$/i.test(r[0].trim())).map(r=>[limpar(r[0]),limpar(r.slice(1).join(d))]).filter(r=>r[0]&&r[1]);
+  }
+  const re=/(?:^|\n)\s*P:\s*([\s\S]+?)\s*\n\s*R:\s*([\s\S]+?)(?=\n\s*P:|$)/g,out=[];let m;
+  while((m=re.exec(t)))out.push([limpar(m[1]),limpar(m[2])]);return out;
+}
+
+/* ---------- UI ---------- */
+const st=(el,t,c)=>{$(el).textContent=t;$(el).className="msg "+(c||"")};
+function render(){
+  $("count").textContent=cards.length+" cartões encontrados — revise e edite se quiser";
+  $("cards").innerHTML="";
+  cards.forEach((c,i)=>{
+    const d=document.createElement("div");d.className="c";
+    d.innerHTML='<div class="h"><span>Cartão '+(i+1)+'</span><button>Excluir</button></div><textarea></textarea><textarea></textarea>';
+    const [a,b]=d.querySelectorAll("textarea");a.value=c[0];b.value=c[1];
+    a.oninput=()=>{c[0]=a.value;built=null};b.oninput=()=>{c[1]=b.value;built=null};
+    d.querySelector("button").onclick=()=>{cards.splice(i,1);render()};
+    $("cards").appendChild(d);
+  });
+  $("dl").classList.add("hide");$("hint").classList.add("hide");built=null;
+}
+$("file").onchange=async e=>{
+  const f=e.target.files[0];if(!f)return;
+  st("status","Lendo "+f.name+"…");$("cfg").classList.add("hide");$("list").classList.add("hide");
+  try{
+    cards=/\.pdf$/i.test(f.name)?await lerPDF(await f.arrayBuffer()):lerTexto(f.name,await f.text());
+    if(!cards.length){st("status","Não encontrei flashcards. O PDF precisa ter uma tabela com colunas “Frente” e “Verso”; em texto, use linhas “P:” e “R:”.","err");return}
+    st("status","✓ "+f.name,"ok");
+    const base=f.name.replace(/\.[^.]+$/,"").replace(/[^\p{L}\p{N}]+/gu,"_").slice(0,40);
+    $("file").dataset.src=f.name;$("file").dataset.tag=base;
+    $("cfg").classList.remove("hide");$("list").classList.remove("hide");render();
+  }catch(err){console.error(err);st("status","Erro ao ler o arquivo: "+(err.message||err),"err")}
+};
+
+$("usepaste").onclick=()=>{
+  cards=lerTexto("colado.txt",$("paste").value);
+  if(!cards.length){st("status","Não encontrei cartões no texto. Use linhas “P:” e “R:”.","err");return}
+  st("status","✓ Texto colado","ok");$("file").dataset.src="texto colado";$("file").dataset.tag="colado";
+  $("cfg").classList.remove("hide");$("list").classList.remove("hide");render();
+};
+window.addEventListener("load",()=>{
+  const falta=[["pdfjsLib",typeof pdfjsLib],["JSZip",typeof JSZip],["initSqlJs",typeof initSqlJs]].filter(x=>x[1]==="undefined").map(x=>x[0]);
+  if(falta.length)st("status","Falha ao carregar bibliotecas: "+falta.join(", ")+". Verifique a internet e recarregue.","err");
+});
+/* ---------- Geração do .apkg ---------- */
+const B91="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!#$%&()*+,-./:;<=>?@[]^_`{|}~";
+const enc=new TextEncoder();
+async function sha(alg,s){return new Uint8Array(await crypto.subtle.digest(alg,enc.encode(s)))}
+async function guid(s){let n=0n;(await sha("SHA-256",s)).slice(0,8).forEach(b=>n=(n<<8n)|BigInt(b));let o="";do{o=B91[Number(n%91n)]+o;n/=91n}while(n>0n);return o}
+async function dkey(s){return parseInt([...(await sha("SHA-1",s))].slice(0,4).map(b=>b.toString(16).padStart(2,"0")).join(""),16)}
+const esc=s=>s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#x27;");
+
+async function construir(){
+  const deckName=$("deck").value.trim()||"Estudos::Relatórios", extra=$("tags").value.trim().split(/\s+/).filter(Boolean);
+  const src=$("file").dataset.src||"relatorio", tag="fonte::"+($("file").dataset.tag||"relatorio");
+  const MID=1607392319, DID=await dkey(deckName)||1234567, now=Math.floor(Date.now()/1000);
+  const SQL=await initSqlJs(), db=new SQL.Database();
+  db.run(`CREATE TABLE col(id integer primary key,crt integer not null,mod integer not null,scm integer not null,ver integer not null,dty integer not null,usn integer not null,ls integer not null,conf text not null,models text not null,decks text not null,dconf text not null,tags text not null);
+  CREATE TABLE notes(id integer primary key,guid text not null,mid integer not null,mod integer not null,usn integer not null,tags text not null,flds text not null,sfld integer not null,csum integer not null,flags integer not null,data text not null);
+  CREATE TABLE cards(id integer primary key,nid integer not null,did integer not null,ord integer not null,mod integer not null,usn integer not null,type integer not null,queue integer not null,due integer not null,ivl integer not null,factor integer not null,reps integer not null,lapses integer not null,left integer not null,odue integer not null,odid integer not null,flags integer not null,data text not null);
+  CREATE TABLE revlog(id integer primary key,cid integer not null,usn integer not null,ease integer not null,ivl integer not null,lastIvl integer not null,factor integer not null,time integer not null,type integer not null);
+  CREATE TABLE graves(usn integer not null,oid integer not null,type integer not null);
+  CREATE INDEX ix_notes_usn on notes(usn);CREATE INDEX ix_cards_usn on cards(usn);CREATE INDEX ix_notes_csum on notes(csum);CREATE INDEX ix_cards_nid on cards(nid);CREATE INDEX ix_cards_sched on cards(did,queue,due);`);
+  const css=".card{font-family:Arial,Helvetica,sans-serif;font-size:20px;text-align:left;color:#2b2b2b;background:#fff;line-height:1.45}\n.front{font-weight:600}\nhr#answer{border:0;border-top:2px solid #ff5fa2;margin:14px 0}\n";
+  const model={[MID]:{vers:[],name:"Flashcard Relatório (Básico)",tags:[],did:DID,usn:-1,req:[[0,"all",[0]]],flds:["Frente","Verso","Fonte"].map((n,i)=>({name:n,media:[],sticky:false,rtl:false,ord:i,font:"Arial",size:20})),sortf:0,tmpls:[{name:"Cartão 1",ord:0,qfmt:'<div class="front">{{Frente}}</div>',afmt:'{{FrontSide}}<hr id="answer"><div>{{Verso}}</div>',bqfmt:"",bafmt:"",did:null,bfont:"",bsize:0}],mod:now,latexPre:"",latexPost:"",type:0,id:MID,css}};
+  const dk=(id,name)=>({id,name,mod:now,usn:-1,lrnToday:[0,0],revToday:[0,0],newToday:[0,0],timeToday:[0,0],collapsed:false,browserCollapsed:false,desc:"",dyn:0,conf:1,extendNew:10,extendRev:50});
+  const decks={1:dk(1,"Default"),[DID]:dk(DID,deckName)};
+  const dconf={1:{id:1,mod:0,name:"Default",usn:0,maxTaken:60,autoplay:true,timer:0,replayq:true,new:{bury:false,delays:[1,10],initialFactor:2500,ints:[1,4,7],order:1,perDay:20,separate:true},rev:{bury:false,ease4:1.3,fuzz:0.05,ivlFct:1,maxIvl:36500,perDay:100,minSpace:1},lapse:{delays:[10],leechAction:0,leechFails:8,minInt:1,mult:0},dyn:false}};
+  const conf={activeDecks:[1],addToCur:true,collapseTime:1200,curDeck:1,curModel:String(MID),dueCounts:true,estTimes:true,newBury:true,newSpread:0,nextPos:1,sortBackwards:false,sortType:"noteFld",timeLim:0};
+  db.run("INSERT INTO col VALUES(1,?,?,?,11,0,0,0,?,?,?,?,'{}')",[now,now*1000,now*1000,JSON.stringify(conf),JSON.stringify(model),JSON.stringify(decks),JSON.stringify(dconf)]);
+  const tags=" "+[...extra,tag].join(" ")+" ", seen=new Set(), tsv=[];let id0=Date.now(),k=0;
+  for(const [f0,v0] of cards){
+    const f=f0.trim(),v=v0.trim();if(!f||!v||seen.has(f))continue;seen.add(f);
+    const nid=id0+k, fe=esc(f), flds=[fe,esc(v),src].join("\x1f");
+    const cs=parseInt([...(await sha("SHA-1",fe))].slice(0,4).map(b=>b.toString(16).padStart(2,"0")).join(""),16);
+    db.run("INSERT INTO notes VALUES(?,?,?,?,-1,?,?,?,?,0,'')",[nid,await guid(f),MID,now,tags,flds,fe,cs]);
+    db.run("INSERT INTO cards VALUES(?,?,?,0,?,-1,0,0,?,0,0,0,0,0,0,0,0,'')",[nid,nid,DID,now,k]);
+    tsv.push([f,v,[...extra,tag].join(" ")].map(x=>x.replace(/[\t\r\n]+/g," ")).join("\t"));k++;
+  }
+  const dbBytes=db.export();db.close();
+  const z=new JSZip();z.file("collection.anki2",dbBytes);z.file("media","{}");
+  const zip=await z.generateAsync({type:"uint8array",compression:"DEFLATE"});
+  const safe=deckName.replace(/[^\p{L}\p{N}]+/gu,"_").replace(/^_|_$/g,"")||"baralho";
+  return {zip,txt:"#separator:tab\n#html:false\n#tags column:3\n"+tsv.join("\n")+"\n",safe,n:k};
+}
+$("gen").onclick=async()=>{
+  $("gen").disabled=true;st("gstatus","Gerando…");
+  try{built=await construir();st("gstatus","✓ "+built.n+" cartões prontos.","ok");$("dl").classList.remove("hide");$("hint").classList.remove("hide");
+    $("hint").textContent="Abra o arquivo baixado com o Anki (AnkiDroid, AnkiMobile ou desktop). Se preferir, use o .txt: no Anki, Importar → escolha o arquivo.";
+  }catch(e){console.error(e);st("gstatus","Erro ao gerar: "+(e.message||e),"err")}
+  $("gen").disabled=false;
+};
+function salvar(nome,data){
+  const url=URL.createObjectURL(new Blob([data],{type:"application/octet-stream"}));
+  const a=document.createElement("a");a.href=url;a.download=nome;document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),10000);st("gstatus","✓ Baixando "+nome+" — abra o arquivo com o Anki.","ok");
+}
+$("dl-zip").onclick=()=>built&&salvar(built.safe+".apkg",built.zip);
+$("dl-txt").onclick=()=>built&&salvar(built.safe+".txt",built.txt);
+</script></body></html>
